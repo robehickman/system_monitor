@@ -1,6 +1,6 @@
 # System Monitor
 
-A network enabled led system monitor and dashboard construction kit (a la conky) that can monitor data from multiple systems at once in a single interface.
+A network enabled system monitor and dashboard construction kit (a la conky) that can monitor data from multiple systems at once in a single interface.
 
 Note that this system was designed to be tunneled over an overlay network like wireguard or nebula, and has no native authentication or encryption. DO NOT bind the server to a public network interface!
 
