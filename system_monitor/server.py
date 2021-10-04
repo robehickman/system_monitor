@@ -1,15 +1,17 @@
-import json, shutil, psutil, os, socket, struct, time
+import os, struct, time, json
+import socket, shutil
+import psutil 
+
 from threading import Thread, Lock
-from pprint import pprint
 
 with open('/etc/system_monitor.json', 'r') as f:
     config = json.loads(f.read())
+
 
 # ===============================================
 # Utility functions to enumerate disks,
 # mounted file systems etc
 # ===============================================
-
 
 # ===============================================
 def get_physical_disks():
@@ -21,7 +23,7 @@ def get_physical_disks():
     for dev in all_devices:
         if dev['name'][0:4] == 'nvme' or dev['name'][0:2] == 'sd':
             devices.append(dev['name'])
-        
+
     return devices
 
 # ===============================================
@@ -151,8 +153,8 @@ def update_network_use(check_interval):
             network_recv_last = network.bytes_recv
             network_sent_last = network.bytes_sent
 
-        recv = network.bytes_recv - network_recv_last 
-        sent = network.bytes_sent - network_sent_last 
+        recv = network.bytes_recv - network_recv_last
+        sent = network.bytes_sent - network_sent_last
 
         threadLock.acquire()
         data_cache['network'] = {
@@ -204,13 +206,10 @@ if 'network_use' in config['check']:
 # =================================================
 def conection_handler(c, addr):
     while True:
-
-        pprint(data_cache)
-
         threadLock.acquire()
         data = json.dumps(data_cache).encode()
         threadLock.release()
-        
+
         c.send(struct.pack("!i", len(data)))
         c.send(data)
 
@@ -221,11 +220,11 @@ def conection_handler(c, addr):
 # =================================================
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind((config['bind_address'], config['bind_port']))        
-s.listen(5)    
+s.bind((config['bind_address'], config['bind_port']))
+s.listen(5)
 
 while True:
-    c, addr = s.accept()    
+    c, addr = s.accept()
     c.settimeout(60)
     t = Thread(target = conection_handler,args = (c,addr))
     pool.append(t)

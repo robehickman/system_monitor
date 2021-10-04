@@ -1,37 +1,44 @@
+import sys, copy, time, decimal
+import json, socket, struct 
+
+from threading import Thread, Lock
+
 from ctypes import *
 from sdl2 import *
 from sdl2.sdlttf import *
 import sdl2.ext
 
-import json, socket, struct, decimal
-from pprint import pprint
 
-# text color: white
-fg = SDL_Color(255,0,0)
- 
-# bgcolor: black
-bg = SDL_Color(0,0,0)
+# text color
+fg_normal = None
+fg_error  = None
+
+# background color
+bg = None
 
 window_width  = 1920
 window_height = 1080
+
+# ==================
+stored_config = None
+pool = []
 
 # ==============================================
 def round(value, places = 1):
     return decimal.Decimal(str(value)).quantize(decimal.Decimal('1e-' + str(places)))
 
 # ==============================================
-def render_text(text):
-    # render text into surface
-    #surface = TTF_RenderText_Solid(font, b"Hello world!", fg)
-    #surface = TTF_RenderText_Shaded(font, b"Hello world!", fg, bg)
-    surface = TTF_RenderText_Blended(font, text.encode(), fg)
-     
-    # create texture from surface
-    texture = SDL_CreateTextureFromSurface(renderer, surface)
+def render_text(text, color):
 
+    col = fg_normal
+
+    if color == 'error':
+        col = fg_error
+
+    surface = TTF_RenderText_Blended(font, text.encode(), col)
+    texture = SDL_CreateTextureFromSurface(renderer, surface)
     SDL_FreeSurface(surface)
 
-     
     # get size of the text-texture
     texW = c_int()
     texH = c_int()
@@ -39,13 +46,6 @@ def render_text(text):
 
     return texture, texW, texH
 
-
-# ==============================================
-def heading(text):
-    return {
-        'type' : 'heading',
-        'data' : render_text(text)
-    }
 
 
 # ==============================================
@@ -58,21 +58,6 @@ def render_heading(renderer, pos_x, pos_y, data):
     SDL_RenderCopy(renderer, data[0], None, dstrect)
 
 
-# ==============================================
-def table(data):
-    # Render all labels
-    result = []
-    for row in data:
-        rendered_row = []
-        for col in row:
-            rendered_row.append(render_text(col))
-
-        result.append(rendered_row)
-
-    return {
-        'type' : 'table',
-        'data' : result
-    }
 
 
 # ==============================================
@@ -116,7 +101,6 @@ def render_table(renderer, pos_x, pos_y, data):
 # ==========================================
 def render_display_list(display_list, pos_x = 0, pos_y = 0):
     for item in display_list:
-
         if item['type'] == 'vertical_stack':
             y_offset = pos_y
 
@@ -133,7 +117,7 @@ def render_display_list(display_list, pos_x = 0, pos_y = 0):
                 y_offset += 20
 
         elif item['type'] == 'horizontal_stack':
-            col_width = window_width / len(item['data']) 
+            col_width = window_width / len(item['data'])
 
             i = 0
             for it in item['data']:
@@ -170,39 +154,114 @@ def free_display_list(display_list):
 
 
 
+# ==========================================
+running           = True
+
+def shutdown_handler(exctype, value, traceback):
+    global running
+    if exctype == KeyboardInterrupt:
+        running = False
+    else:
+        sys.__excepthook__(exctype, value, traceback)
+sys.excepthook = shutdown_handler
+
+# ==========================================
+remote_data_cache = {}
+threadLock        = Lock()
+
+def server_connection_handler(hostname, con_info):
+    global running, remote_data_cache, threadLock
+
+    while running:
+        try:
+            s = socket.socket()
+            s.settimeout(5)
+
+            s.connect((con_info[0], con_info[1]))
+
+            print('connected to ' + hostname)
+
+            while running:
+                data_length = struct.unpack("!i", s.recv(4))[0]
+
+                data = b''
+                while len(data) != data_length:
+                    data += s.recv(data_length)
+
+                data = json.loads(data)
+
+                with threadLock:
+                    remote_data_cache[hostname] = data
+
+        except KeyboardInterrupt:
+            return
+
+        except Exception as e:
+            with threadLock:
+                try:
+                    remote_data_cache.pop(hostname)
+                except KeyError:
+                    pass
+
+            print('lost connection to ' + hostname + ', waiting to reconect' )
+
+            time.sleep(10)
+
 
 # ==============================================================================
 # Main client API
 # ==============================================================================
-stored_config = None
 
 def init_client(config):
-    global win, renderer, font, stored_config
+    global fg_normal, fg_error, bg, win, renderer, font, stored_config, pool
 
     stored_config = config
+
+    # ----------
+    if 'fg_normal' in config:
+        fg_normal = SDL_Color(config['fg_normal'][0], config['fg_normal'][1], config['fg_normal'][2])
+    else:
+        fg_normal = SDL_Color(131, 149, 199)
+
+    # ----------
+    if 'fg_error' in config:
+        fg_error = SDL_Color(config['fg_error'][0], config['fg_error'][1], config['fg_error'][2])
+    else:
+        fg_error = SDL_Color(255, 0, 0)
+
+    # ----------
+    if 'bg' in config:
+        bg = SDL_Color(config['bg'][0], config['bg'][1], config['bg'][2])
+    else:
+        bg = SDL_Color(10,10,10)
 
 
     # Initialize SDL2
     SDL_Init(SDL_INIT_VIDEO)
-     
+    SDL_EnableScreenSaver()
+
     # Initialize SDL2_ttf
     TTF_Init()
-     
+
     # legacy mode or OpenGL mode
     win = SDL_CreateWindow(b"Dashboard",  0,0, window_width, window_height,  SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE)
 
     # create renderer
     renderer = SDL_CreateRenderer(win, -1, 0)
-     
+
     # load TTF font
     font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".encode(), 16)
-     
-    SDL_EnableScreenSaver()
+
+    # ====================
+    for hostname, con_info in stored_config['hosts'].items():
+        pool.append(
+            Thread(target=server_connection_handler,
+                args=(hostname, con_info)))
+
+    [t.start() for t in pool]
 
 
 # =====================================
-running = True
-
 def client_active():
     global running, window_width, window_height
 
@@ -224,44 +283,29 @@ def client_active():
     return running
 
 # =====================================
-connections = {}
-
 def get_remote_data():
-    global connections
+    global remote_data_cache, threadLock
 
-    remote_data = {}
+    data = None
 
-    for hostname, con_info in stored_config['hosts'].items():
-        if hostname not in connections:
-            s = socket.socket()        
-            s.connect((con_info[0], con_info[1]))
-            connections[hostname] = s
+    with threadLock:
+        data = copy.deepcopy(remote_data_cache)
 
-        s = connections[hostname]
-
-        data_length = struct.unpack("!i", s.recv(4))[0]
-
-        data = b'' 
-        while len(data) != data_length:
-            data += s.recv(data_length)
-
-        remote_data[hostname]  = json.loads(data)
-
-    return remote_data
+    return data
 
 
 # ==========================================
 def render(display_list):
     # Clear screen
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderClear(renderer);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255)
+    SDL_RenderClear(renderer)
 
     render_display_list(display_list)
 
     SDL_RenderPresent(renderer)
 
     free_display_list(display_list)
- 
+
 # ==========================================
 def close_client():
     TTF_CloseFont(font)
@@ -270,3 +314,144 @@ def close_client():
     TTF_Quit()
     SDL_Quit()
 
+# ==============================================================================
+# Client GUI helpers
+# ==============================================================================
+def horizontal_stack(data):
+    return [{
+        'type' : 'horizontal_stack',
+        'data' : data
+    }]
+
+
+# ======================================
+def vertical_stack(data):
+    return [{
+        'type' : 'vertical_stack',
+        'data' : data
+    }]
+
+
+# ==============================================
+def heading(text, color = 'normal'):
+    return {
+        'type'  : 'heading',
+        'data'  : render_text(text, color)
+    }
+
+
+# ==============================================
+def table(data, color = 'normal'):
+    # Render all labels
+    result = []
+    for row in data:
+        rendered_row = []
+        for col in row:
+            rendered_row.append(render_text(col, color))
+
+        result.append(rendered_row)
+
+    return {
+        'type' : 'table',
+        'data' : result
+    }
+
+
+# ======================================
+def render_smart_data_block(remote_data, hostname, smart_device, device_conf):
+    if hostname not in remote_data:
+        return [heading('Cannot connect to ' + hostname, 'error')]
+
+    device_data = remote_data[hostname]['smart_data'][smart_device]
+
+    # Rudimentary error checking
+    is_error = False
+
+    if not device_data['passed']:
+        is_error = True
+
+    for attr_name in stored_config['smart_error'][hostname][smart_device]:
+        if int(device_data['attrs'][attr_name]) > 0:
+            is_error = True
+
+    # =================
+    output = [
+        [smart_device, ('Passed' if device_data['passed'] else 'Failed')]
+    ]
+
+    for attr_name in device_conf:
+        output.append([
+            attr_name,
+            device_data['attrs'][attr_name]
+        ])
+
+    color = 'normal' if not is_error else 'error'
+
+    return [table(output, color)]
+
+
+# ======================================
+def render_disk_usage(remote_data, hostname):
+    if hostname not in remote_data:
+        return [heading('Cannot connect to ' + hostname, 'error')]
+
+    res = [heading('Percentage disk used')]
+
+    output = []
+    for device, used in remote_data[hostname]['disk_use'].items():
+        output.append([device + ': ', str(round(used * 100))])
+
+    return res + [table(output)]
+
+
+# ======================================
+def render_memory_usage(remote_data, hostname):
+    if hostname not in remote_data:
+        return [heading('Cannot connect to ' + hostname, 'error')]
+
+    return [
+        table([[
+            'Memory:',
+            str(round(remote_data[hostname]['memory']['used'] / 1048576))  + ' MB of ' + str(round(remote_data[hostname]['memory']['available'] / 1048576)) + ' MB'
+        ]])
+    ]
+
+
+# ======================================
+def render_cpu_usage(remote_data, hostname):
+    if hostname not in remote_data:
+        return [heading('Cannot connect to ' + hostname, 'error')]
+
+    res = [heading('CPU')]
+
+    i = 1
+    output = []
+    for usage in remote_data[hostname]['cpu']:
+        output.append([
+            'cpu' + str(i) + ': ',
+            str(usage)
+        ])
+
+        i += 1
+
+    return res + [table(output)]
+
+
+# ======================================
+def render_network_usage(remote_data, hostname):
+    if hostname not in remote_data:
+        return [heading('Cannot connect to ' + hostname, 'error')]
+
+    return [
+        heading('Network'),
+        table([
+            [
+                'Recv:',
+                str(round(remote_data[hostname]['network']['recv']))
+            ],
+            [
+                'Sent:',
+                str(round(remote_data[hostname]['network']['sent']))
+            ]
+        ])
+    ]
