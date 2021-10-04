@@ -13,10 +13,10 @@ Install:
 sudo pip3 install .
 ```
 
+
 Create server config in /etc/system\_monitor.json
 
 Fields under 'check' specify what system information should be sent to a connected client. The value associated with each key is the frequency (in seconds) to poll this resource and update the cached data.
-
 
 ```
 {
@@ -32,6 +32,14 @@ Fields under 'check' specify what system information should be sent to a connect
     }
 }
 ```
+
+
+Run the server. Note that this can also be run from a systemd unit file to make it start on boot.
+
+```
+monitor_server.py
+```
+
 
 Configure and run the client. See dashboard.demo.py
 

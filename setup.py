@@ -17,6 +17,7 @@ setup(
     install_requires=[
         'pysdl2',
         'pysdl2-dll',
+        'psutil',
     ],
     scripts=['monitor_server.py'],
     zip_safe=False)
