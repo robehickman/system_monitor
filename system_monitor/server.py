@@ -159,7 +159,7 @@ def update_network_use(check_interval):
         threadLock.acquire()
         data_cache['network'] = {
             'sent' : sent / 1024,
-            'recv' : sent / 1024,
+            'recv' : recv / 1024,
         }
         threadLock.release()
 
